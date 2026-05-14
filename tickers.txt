@@ -1,10 +1,17 @@
 # One ticker per line. Optional yfinance alias via `=`.
 # Lines starting with # are ignored.
+#
+# yfinance limitation: Yahoo's unauthenticated options endpoint does NOT
+# populate `impliedVolatility` for most single-stock chains — verified
+# 2026-05-14 (MSFT/AMZN/NVDA/TLT/GLD/IWM all returned chains with 0 valid
+# IVs out of ~25 expirations each, while ^SPX gave 52/52). Re-enable any of
+# the commented entries if you switch to a real options data source (Tradier
+# sandbox is the planned next step).
 SPX=^SPX
 QQQ
-IWM
-MSFT
-AMZN
-NVDA
-TLT
-GLD
+# IWM
+# MSFT
+# AMZN
+# NVDA
+# TLT
+# GLD

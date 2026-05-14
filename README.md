@@ -90,6 +90,32 @@ History builds forward from your first run. For backfill you'd need a
 paid source (ORATS, Polygon, IVolatility) — see the main repo's planning
 doc for that path.
 
+## Known limitation: yfinance + single-stock options
+
+Yahoo's unauthenticated options endpoint reliably populates the
+`impliedVolatility` field **only for cash-index symbols** like `^SPX`.
+For most single-stock and ETF chains it returns the chain structure
+correctly but with `impliedVolatility` null or set to a 0.000001
+placeholder. Verified 2026-05-14:
+
+| Ticker | Expirations returned | IV populated |
+|---|---|---|
+| SPX (`^SPX`) | 52 | 52 ✓ |
+| QQQ | 30 | ~4 (longer-dated only) |
+| IWM | 30 | 0 |
+| MSFT | 23 | 0 |
+| AMZN | 23 | 0 |
+| NVDA | 22 | 1 |
+| TLT | 25 | 1 |
+| GLD | 25 | 0 |
+
+Switching impersonation library (`curl_cffi`), adding retries, fresh
+`Ticker` instances per attempt, etc. — none help. The data isn't there
+to be scraped. To cover stock options you need a different data source:
+**Tradier's free sandbox** (`https://sandbox.tradier.com`) exposes
+proper IV per contract via a real API key, and is the planned upgrade
+path. Until that's wired in, this snapshotter is scoped to SPX + QQQ.
+
 ## Troubleshooting
 
 - **`SPX` returns no options.** Yahoo's index ticker for S&P options is
