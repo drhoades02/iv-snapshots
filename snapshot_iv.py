@@ -148,6 +148,8 @@ def snapshot_ticker(logical: str, yf_symbol: str, snap_date: str) -> list[dict]:
 
     today = date.fromisoformat(snap_date)
     rows: list[dict] = []
+    counts = {"past": 0, "chain_failed": 0, "empty_chain": 0, "no_iv": 0, "ok": 0}
+    print(f"     {len(expirations)} expirations returned: {list(expirations)[:6]}{'…' if len(expirations) > 6 else ''}")
     for exp_str in expirations:
         try:
             exp_d = date.fromisoformat(exp_str)
@@ -155,17 +157,20 @@ def snapshot_ticker(logical: str, yf_symbol: str, snap_date: str) -> list[dict]:
             continue
         dte = (exp_d - today).days
         if dte < 0:
+            counts["past"] += 1
             continue
 
         try:
             chain = t.option_chain(exp_str)
         except Exception as exc:
+            counts["chain_failed"] += 1
             print(f"     {exp_str} chain failed: {exc}")
             continue
 
         calls = chain.calls if hasattr(chain, "calls") else pd.DataFrame()
         puts = chain.puts if hasattr(chain, "puts") else pd.DataFrame()
         if calls.empty and puts.empty:
+            counts["empty_chain"] += 1
             continue
 
         # ATM = strike closest to spot, considering both sides.
@@ -199,9 +204,11 @@ def snapshot_ticker(logical: str, yf_symbol: str, snap_date: str) -> list[dict]:
                     put_oi = int(oi)
 
         if call_iv is None and put_iv is None:
+            counts["no_iv"] += 1
             continue
         ivs = [v for v in (call_iv, put_iv) if v is not None]
         atm_iv = sum(ivs) / len(ivs)
+        counts["ok"] += 1
 
         rows.append({
             "snapshot_date": snap_date,
@@ -216,7 +223,11 @@ def snapshot_ticker(logical: str, yf_symbol: str, snap_date: str) -> list[dict]:
             "atm_put_oi": put_oi if put_oi is not None else "",
         })
 
-    print(f"     {len(rows)} expirations, spot=${spot:.2f}")
+    print(
+        f"     {counts['ok']}/{len(expirations)} usable rows, spot=${spot:.2f} "
+        f"(past={counts['past']}, chain_failed={counts['chain_failed']}, "
+        f"empty_chain={counts['empty_chain']}, no_iv={counts['no_iv']})"
+    )
     return rows
 
 
