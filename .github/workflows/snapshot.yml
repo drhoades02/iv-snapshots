@@ -1,0 +1,45 @@
+name: Daily IV Snapshot
+
+on:
+  schedule:
+    # 22:00 UTC = 6pm EDT / 5pm EST — after market close (16:00 ET) with margin
+    # for Yahoo to settle EOD IV. Weekdays only (Mon=1 … Fri=5).
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run snapshotter
+        run: python snapshot_iv.py
+
+      - name: Commit and push
+        run: |
+          git config user.name  "iv-snapshot-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add data/
+          if git diff --staged --quiet; then
+            echo "No CSV changes — nothing to commit."
+          else
+            git commit -m "iv snapshot $(TZ=America/New_York date +%Y-%m-%d)"
+            git push
+          fi

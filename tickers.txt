@@ -1,0 +1,10 @@
+# One ticker per line. Optional yfinance alias via `=`.
+# Lines starting with # are ignored.
+SPX=^SPX
+QQQ
+IWM
+MSFT
+AMZN
+NVDA
+TLT
+GLD
