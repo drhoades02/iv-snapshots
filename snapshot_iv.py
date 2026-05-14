@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import sys
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
@@ -19,6 +20,14 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
+
+# Yahoo's unofficial options endpoint throttles aggressively when called for
+# multiple single-stock tickers in quick succession. These knobs add a small
+# delay between tickers and retry empty `t.options` results with exponential
+# backoff — empty almost always means rate-limited rather than "no options."
+INTER_TICKER_DELAY_SECONDS = 1.5
+EMPTY_OPTIONS_RETRIES = 3
+EMPTY_OPTIONS_BACKOFF_SECONDS = (3.0, 6.0, 12.0)
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -87,13 +96,29 @@ def snapshot_ticker(logical: str, yf_symbol: str, snap_date: str) -> list[dict]:
         print(f"     no spot price — skipping")
         return []
 
-    try:
-        expirations: tuple[str, ...] = t.options
-    except Exception as exc:
-        print(f"     no options listing: {exc}")
-        return []
+    expirations: tuple[str, ...] = ()
+    last_err: Exception | None = None
+    for attempt in range(EMPTY_OPTIONS_RETRIES):
+        try:
+            expirations = t.options or ()
+        except Exception as exc:
+            last_err = exc
+            expirations = ()
+        if expirations:
+            if attempt > 0:
+                print(f"     recovered after {attempt} retries")
+            break
+        if attempt < EMPTY_OPTIONS_RETRIES - 1:
+            delay = EMPTY_OPTIONS_BACKOFF_SECONDS[
+                min(attempt, len(EMPTY_OPTIONS_BACKOFF_SECONDS) - 1)
+            ]
+            print(f"     empty options (attempt {attempt + 1}); retrying in {delay:.0f}s…")
+            time.sleep(delay)
     if not expirations:
-        print(f"     empty options listing")
+        if last_err is not None:
+            print(f"     no options after retries (last error: {last_err})")
+        else:
+            print(f"     no options after retries (Yahoo returned empty)")
         return []
 
     today = date.fromisoformat(snap_date)
@@ -204,7 +229,9 @@ def main() -> int:
 
     summary: list[tuple[str, int, int]] = []
     failures = 0
-    for logical, yf_sym in tickers:
+    for idx, (logical, yf_sym) in enumerate(tickers):
+        if idx > 0:
+            time.sleep(INTER_TICKER_DELAY_SECONDS)  # be polite to Yahoo
         try:
             rows = snapshot_ticker(logical, yf_sym, snap_date)
         except Exception as exc:
