@@ -11,6 +11,7 @@ No credentials required; yfinance hits Yahoo's public API.
 from __future__ import annotations
 
 import csv
+import functools
 import sys
 import time
 from datetime import date, datetime
@@ -22,12 +23,25 @@ import pandas as pd
 import yfinance as yf
 
 # Yahoo's unofficial options endpoint throttles aggressively when called for
-# multiple single-stock tickers in quick succession. These knobs add a small
-# delay between tickers and retry empty `t.options` results with exponential
-# backoff — empty almost always means rate-limited rather than "no options."
-INTER_TICKER_DELAY_SECONDS = 1.5
+# multiple single-stock tickers in quick succession, especially from cloud IPs
+# (CI runners). `curl_cffi` impersonates a real Chrome TLS fingerprint, which
+# is what yfinance's docs now recommend as the standard anti-bot workaround.
+try:
+    from curl_cffi import requests as cf_requests
+    _SESSION_FACTORY = functools.partial(cf_requests.Session, impersonate="chrome")
+    _SESSION_KIND = "curl_cffi(chrome)"
+except ImportError:
+    cf_requests = None  # type: ignore[assignment]
+    _SESSION_FACTORY = None
+    _SESSION_KIND = "stdlib (curl_cffi unavailable)"
+
+# Force unbuffered stdout so retry/progress messages appear in CI logs in real
+# time rather than as one batch at process exit.
+print = functools.partial(print, flush=True)  # noqa: A001
+
+INTER_TICKER_DELAY_SECONDS = 2.0
 EMPTY_OPTIONS_RETRIES = 3
-EMPTY_OPTIONS_BACKOFF_SECONDS = (3.0, 6.0, 12.0)
+EMPTY_OPTIONS_BACKOFF_SECONDS = (4.0, 8.0, 16.0)
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -88,9 +102,18 @@ def get_spot(t: yf.Ticker) -> float:
     return 0.0
 
 
+def _new_ticker(yf_symbol: str) -> yf.Ticker:
+    """Fresh Ticker, ideally with the curl_cffi impersonation session. yfinance
+    caches `t.options` on the instance, so each retry needs a new Ticker to
+    actually re-hit Yahoo."""
+    if _SESSION_FACTORY is not None:
+        return yf.Ticker(yf_symbol, session=_SESSION_FACTORY())
+    return yf.Ticker(yf_symbol)
+
+
 def snapshot_ticker(logical: str, yf_symbol: str, snap_date: str) -> list[dict]:
     print(f"  → {logical} (yf={yf_symbol})")
-    t = yf.Ticker(yf_symbol)
+    t = _new_ticker(yf_symbol)
     spot = get_spot(t)
     if spot <= 0:
         print(f"     no spot price — skipping")
@@ -99,14 +122,16 @@ def snapshot_ticker(logical: str, yf_symbol: str, snap_date: str) -> list[dict]:
     expirations: tuple[str, ...] = ()
     last_err: Exception | None = None
     for attempt in range(EMPTY_OPTIONS_RETRIES):
+        attempt_t = t if attempt == 0 else _new_ticker(yf_symbol)
         try:
-            expirations = t.options or ()
+            expirations = attempt_t.options or ()
         except Exception as exc:
             last_err = exc
             expirations = ()
         if expirations:
             if attempt > 0:
-                print(f"     recovered after {attempt} retries")
+                print(f"     recovered after {attempt} retries ({len(expirations)} expirations)")
+                t = attempt_t  # use the fresh ticker for chain fetches below
             break
         if attempt < EMPTY_OPTIONS_RETRIES - 1:
             delay = EMPTY_OPTIONS_BACKOFF_SECONDS[
@@ -222,6 +247,7 @@ def upsert_csv(logical: str, new_rows: Iterable[dict]) -> int:
 def main() -> int:
     snap_date = snapshot_date_iso()
     print(f"IV snapshot for {snap_date} (America/New_York)")
+    print(f"HTTP session: {_SESSION_KIND}")
     tickers = load_tickers()
     if not tickers:
         print("No tickers configured in tickers.txt")
